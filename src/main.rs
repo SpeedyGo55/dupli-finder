@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use clap::Parser;
 
 /// Find duplicate files in a directory tree.
@@ -59,65 +60,67 @@ fn find_files(
                     files.push(path.to_string_lossy().into_owned());
                 }
             } else if path.is_dir() && recurse {
-                // if is_hidden(&path.to_str().unwrap()) && hidden {
-                //     files.extend(find_files(
-                //         vec![path.to_string_lossy().into_owned()],
-                //         true,
-                //         hidden,
-                //         follow_symlinks,
-                //         min_size,
-                //     ));
-                // } else if !is_hidden(&path.to_str().unwrap()) {
-                //     files.extend(find_files(
-                //         vec![path.to_string_lossy().into_owned()],
-                //         true,
-                //         hidden,
-                //         follow_symlinks,
-                //         min_size,
-                //     ));
-                // }
-
-                files.extend(find_files(
-                    vec![path.to_string_lossy().into_owned()],
-                    true,
-                    hidden,
-                    follow_symlinks,
-                    min_size,
-                ));
+                if is_hidden(&path.to_str().unwrap()) && hidden {
+                    files.extend(find_files(
+                        vec![path.to_string_lossy().into_owned()],
+                        true,
+                        hidden,
+                        follow_symlinks,
+                        min_size,
+                    ));
+                } else if !is_hidden(&path.to_str().unwrap()) {
+                    files.extend(find_files(
+                        vec![path.to_string_lossy().into_owned()],
+                        true,
+                        hidden,
+                        follow_symlinks,
+                        min_size,
+                    ));
+                }
             }
         }
     }
     files
 }
 
-fn find_duplicates(files: Vec<String>) -> Vec<String> {
-    let mut duplicates = Vec::new();
-    let mut files = files.to_vec();
-    files.sort();
-    let mut current_file = files.first().unwrap().clone();
-    let mut current_hash = sha256::digest(&std::fs::read(&current_file).unwrap());
-    for file in files.iter().skip(1) {
-        let hash = sha256::digest(&std::fs::read(file).unwrap());
-        if hash == current_hash {
-            duplicates.push(file.clone());
+fn find_duplicates(files: Vec<String>) -> HashMap<String, Vec<String>> {
+    let mut file_map: HashMap<String, String> = HashMap::new();
+    let mut duplicates: HashMap<String, Vec<String>> = HashMap::new();
+
+    for file in files {
+        let content = std::fs::read(file.clone()).unwrap();
+        let hash = format!("{:x}", md5::compute(content));
+
+        if let Some(existing) = file_map.get(&hash) {
+            duplicates.entry(existing.clone()).or_default().push(file);
         } else {
-            current_file = file.clone();
-            current_hash = hash;
+            file_map.insert(hash, file.clone());
         }
+    }
+
+    let mut duplicate_files = Vec::new();
+    for (original, dupes) in duplicates.clone() {
+        duplicate_files.push(original);
+        duplicate_files.extend(dupes);
     }
     duplicates
 }
 
-fn list_duplicates(files: Vec<String>) {
-    let duplicates = find_duplicates(files);
-    println!("Duplicates found: {}", duplicates.len());
-    for file in duplicates {
-        println!("{}", file);
+fn list_duplicates(files: HashMap<String, Vec<String>>) {
+    for (original, duplicates) in files {
+        println!("Original: {}", original);
+        for dup in duplicates {
+            println!("  Duplicate: {}", dup);
+        }
     }
 }
 
 fn is_hidden(file: &str) -> bool {
-    file.starts_with('.')
+    file.split("/")
+        .last().unwrap()
+        .split("\\")
+        .last().unwrap()
+        .starts_with(".")
 }
 
 fn main() {
@@ -139,8 +142,8 @@ fn main() {
         println!("Automatically deleting duplicates");
     }
 
-    if args.replace {
-        println!("Replacing duplicates with hard links");
+    if args.recurse {
+        println!("Recursing into subdirectories");
     }
 
     let duplicates = find_duplicates(find_files(
@@ -150,7 +153,8 @@ fn main() {
         args.follow_symlinks,
         args.min_size,
     ));
-    println!("Duplicates found: {}", duplicates.len());
+
+    list_duplicates(duplicates);
 
     if args.replace {
         println!("Replacing duplicates with hard links");
